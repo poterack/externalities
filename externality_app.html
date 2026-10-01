@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Externality Explorer</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Georgia', serif; background: #f5f5f5; padding: 20px; }
+  h2 { text-align: center; color: #222; margin-bottom: 16px; font-size: 20px; }
+  #container { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+  #graph { background: white; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.12); display: block; }
+  #controls {
+    background: white; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.12);
+    padding: 16px 20px; width: 680px; display: flex; flex-direction: column; gap: 14px;
+  }
+  .ctrl-row { display: flex; align-items: center; gap: 10px; }
+  .ctrl-name { font-size: 13px; font-weight: bold; color: #444; width: 100px; flex-shrink: 0; }
+  .slider-wrap { flex: 1; display: flex; flex-direction: column; gap: 3px; }
+  .slider-wrap input[type=range] { width: 100%; cursor: pointer; }
+  .slider-ends { display: flex; justify-content: space-between; font-size: 11px; color: #888; }
+  .slider-ends span.active-left  { color: #c0392b; font-weight: bold; }
+  .slider-ends span.active-right { color: #27ae60; font-weight: bold; }
+  .val-display { font-size: 13px; color: #555; width: 44px; text-align: right; flex-shrink: 0; }
+  #legend {
+    background: white; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.12);
+    padding: 10px 16px; width: 680px; display: flex; flex-wrap: wrap; gap: 10px;
+    font-size: 12px; min-height: 38px; align-items: center;
+  }
+  .legend-item { display: flex; align-items: center; gap: 5px; }
+  .legend-swatch { width: 15px; height: 15px; border-radius: 3px; flex-shrink: 0; }
+</style>
+</head>
+<body>
+<div id="container">
+  <h2>Externality Explorer</h2>
+  <svg id="graph" width="680" height="440"></svg>
+
+  <div id="controls">
+    <div class="ctrl-row">
+      <span class="ctrl-name">Externality</span>
+      <div class="slider-wrap">
+        <input type="range" id="ext-slider" min="-4" max="4" step="0.1" value="0">
+        <div class="slider-ends">
+          <span id="ext-left">← Negative Externality</span>
+          <span id="ext-right">Positive Externality →</span>
+        </div>
+      </div>
+      <span class="val-display" id="ext-val">0.0</span>
+    </div>
+    <div class="ctrl-row">
+      <span class="ctrl-name">Tax / Subsidy</span>
+      <div class="slider-wrap">
+        <input type="range" id="tax-slider" min="-4" max="4" step="0.1" value="0">
+        <div class="slider-ends">
+          <span id="tax-left">← Subsidy</span>
+          <span id="tax-right">Tax →</span>
+        </div>
+      </div>
+      <span class="val-display" id="tax-val">0.0</span>
+    </div>
+  </div>
+
+  <div id="legend"></div>
+</div>
+
+<script>
+const svg = document.getElementById('graph');
+const W = 680, H = 440;
+const ML = 62, MR = 160, MT = 22, MB = 58;
+const GW = W - ML - MR;
+const GH = H - MT - MB;
+const QMAX = 10, PMAX = 14;
+const EPS = 0.08;
+
+// coordinate transforms
+function sx(q) { return ML + q * GW / QMAX; }
+function sy(p) { return H - MB - p * GH / PMAX; }
+
+// model
+function dP(q) { return 10 - q; }   // MPB = demand
+function sP(q) { return 2 + q; }    // MPC = supply
+
+// svg helpers
+function svgEl(tag, attrs, text) {
+  const e = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  for (const [k,v] of Object.entries(attrs)) e.setAttribute(k, v);
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+function fillPoly(pts, fill, strokeColor) {
+  const pstr = pts.map(p => p[0].toFixed(1)+','+p[1].toFixed(1)).join(' ');
+  return svgEl('polygon', { points: pstr, fill, stroke: strokeColor||'none', 'stroke-width': 0.5 });
+}
+function line(x1,y1,x2,y2,attrs) {
+  return svgEl('line', {x1,y1,x2,y2,stroke:'#333','stroke-width':1,...attrs});
+}
+function dashed(x1,y1,x2,y2,color) {
+  return line(x1,y1,x2,y2,{stroke:color||'#aaa','stroke-dasharray':'4,3','stroke-width':1.2});
+}
+function dot(x,y,r,fill) {
+  return svgEl('circle',{cx:x,cy:y,r,fill,stroke:'white','stroke-width':1.8});
+}
+function txt(x,y,t,attrs) {
+  return svgEl('text',{x,y,'font-family':'Georgia,serif','font-size':13,fill:'#333',
+    'dominant-baseline':'middle',...attrs},t);
+}
+function mathTxt(x,y,t,attrs) {
+  // for italic math-style labels
+  return svgEl('text',{x,y,'font-family':'Georgia,serif','font-size':13,fill:'#444',
+    'font-style':'italic','dominant-baseline':'middle',...attrs},t);
+}
+function curveLine(x1,y1,x2,y2,color,width) {
+  return svgEl('line',{x1,y1,x2,y2,stroke:color,'stroke-width':width||2.5,'stroke-linecap':'round'});
+}
+
+// Colors
+const C_D   = '#2c7bb6';  // demand / MPB
+const C_S   = '#c0392b';  // supply / MPC
+const C_MSC = '#7b1a1a';  // MSC (dark red)
+const C_MSB = '#1a6b3c';  // MSB (dark green)
+const C_CS  = 'rgba(44,123,182,0.18)';
+const C_PS  = 'rgba(192,57,43,0.18)';
+const C_GOV = 'rgba(39,174,96,0.25)';
+const C_EXT = 'rgba(120,60,180,0.22)';
+const C_DWL = 'rgba(80,80,80,0.15)';
+const C_CS_S  = 'rgba(44,123,182,0.45)';
+const C_PS_S  = 'rgba(192,57,43,0.40)';
+const C_GOV_S = 'rgba(39,174,96,0.55)';
+const C_EXT_S = 'rgba(120,60,180,0.45)';
+const C_DWL_S = 'rgba(80,80,80,0.35)';
+
+function draw() {
+  while (svg.firstChild) svg.removeChild(svg.lastChild);
+
+  const ext = parseFloat(document.getElementById('ext-slider').value);
+  const tax = parseFloat(document.getElementById('tax-slider').value);
+
+  document.getElementById('ext-val').textContent = ext.toFixed(1);
+  document.getElementById('tax-val').textContent = tax.toFixed(1);
+
+  const negExt = ext < -EPS;
+  const posExt = ext > EPS;
+  const hasTax = tax > EPS;
+  const hasSub = tax < -EPS;
+  const hasTaxSub = Math.abs(tax) > EPS;
+  const extMag = Math.abs(ext);
+
+  // ── equilibria ────────────────────────────────────────────────────
+  const Q_star = 4, P_star = 6;  // free-market (MPB=MPC)
+
+  let Q_eff = Q_star, P_eff = P_star;
+  if (negExt) {
+    // MSC = MPC + extMag; efficient: MSC = MPB
+    Q_eff = (8 - extMag) / 2;
+    P_eff = dP(Q_eff);
+  } else if (posExt) {
+    // MSB = MPB + extMag; efficient: MSB = MPC
+    Q_eff = (8 + extMag) / 2;
+    P_eff = sP(Q_eff);
+  }
+  Q_eff = Math.max(0.2, Q_eff);
+
+  // traded quantity with tax/subsidy (from MPB = MPC + tax)
+  const Q_tau = Math.max(0.2, Math.min(QMAX - 0.5, (8 - tax) / 2));
+  const P_b   = dP(Q_tau);   // buyer price (on demand curve)
+  const P_s   = sP(Q_tau);   // seller price (on supply curve)
+
+  // "actual" market quantity = Q_tau always (= Q_star when no tax/sub)
+  const Q_act = Q_tau;
+  const Pb_act = P_b;
+  const Ps_act = P_s;
+
+  // MSC and MSB at Q_act
+  const MSC_act = sP(Q_act) + extMag;
+  const MSB_act = dP(Q_act) + extMag;
+
+  // clamp visible P to PMAX
+  function cyp(p) { return sy(Math.min(p, PMAX)); }
+
+  // ── LAYER 0: DWL (behind everything) ─────────────────────────────
+  const dwlDiffers = Math.abs(Q_act - Q_eff) > EPS / 2;
+  if (dwlDiffers) {
+    let triPts;
+    if (!posExt) {
+      // neg ext or no ext: DWL between MPB and MSC
+      triPts = [
+        [sx(Q_eff), sy(P_eff)],
+        [sx(Q_act), sy(Pb_act)],
+        [sx(Q_act), sy(MSC_act)],
+      ];
+    } else {
+      // pos ext: DWL between MSB and MPC
+      triPts = [
+        [sx(Q_eff), sy(P_eff)],
+        [sx(Q_act), sy(Ps_act)],
+        [sx(Q_act), sy(MSB_act)],
+      ];
+    }
+    svg.appendChild(fillPoly(triPts, C_DWL, C_DWL_S));
+  }
+
+  // ── LAYER 1: CS ───────────────────────────────────────────────────
+  svg.appendChild(fillPoly([
+    [sx(0),     sy(dP(0))],
+    [sx(Q_act), sy(Pb_act)],
+    [sx(0),     sy(Pb_act)],
+  ], C_CS, C_CS_S));
+
+  // ── LAYER 2: PS ───────────────────────────────────────────────────
+  svg.appendChild(fillPoly([
+    [sx(0),     sy(sP(0))],
+    [sx(Q_act), sy(Ps_act)],
+    [sx(0),     sy(Ps_act)],
+  ], C_PS, C_PS_S));
+
+  // ── LAYER 3: gov revenue / payment ───────────────────────────────
+  if (hasTaxSub) {
+    const p_lo = Math.min(Pb_act, Ps_act);
+    const p_hi = Math.max(Pb_act, Ps_act);
+    svg.appendChild(fillPoly([
+      [sx(0),     sy(p_lo)],
+      [sx(Q_act), sy(p_lo)],
+      [sx(Q_act), sy(p_hi)],
+      [sx(0),     sy(p_hi)],
+    ], C_GOV, C_GOV_S));
+  }
+
+  // ── LAYER 4: external cost / benefit (drawn on top so full range is visible)
+  if (negExt) {
+    // parallelogram between MPC and MSC from Q=0 to Q_act
+    const pts = [
+      [sx(0),     sy(sP(0))],
+      [sx(Q_act), sy(Ps_act)],
+      [sx(Q_act), sy(MSC_act)],
+      [sx(0),     sy(sP(0) + extMag)],
+    ];
+    svg.appendChild(fillPoly(pts, C_EXT, C_EXT_S));
+  }
+  if (posExt) {
+    // parallelogram between MPB and MSB from Q=0 to Q_act
+    const pts = [
+      [sx(0),     sy(dP(0))],
+      [sx(Q_act), sy(Pb_act)],
+      [sx(Q_act), sy(MSB_act)],
+      [sx(0),     sy(dP(0) + extMag)],
+    ];
+    svg.appendChild(fillPoly(pts, C_EXT, C_EXT_S));
+  }
+
+  // ── CURVES ────────────────────────────────────────────────────────
+
+  // MSC
+  if (negExt) {
+    const qEnd = Math.min(QMAX - 0.3, (PMAX - sP(0) - extMag) / 1);
+    svg.appendChild(curveLine(sx(0), sy(sP(0)+extMag), sx(qEnd), sy(sP(qEnd)+extMag), C_MSC));
+    svg.appendChild(txt(sx(qEnd)+7, sy(sP(qEnd)+extMag), 'MSC', {fill:C_MSC,'font-size':13}));
+  }
+
+  // MSB
+  if (posExt) {
+    const qEnd = Math.min(QMAX - 0.3, (dP(0) + extMag));  // where MSB = 0
+    const qEndClip = Math.min(qEnd, QMAX - 0.3);
+    const pStart = Math.min(dP(0) + extMag, PMAX - 0.2);
+    svg.appendChild(curveLine(sx(0), sy(pStart), sx(qEndClip), sy(Math.max(0.1, dP(qEndClip)+extMag)), C_MSB));
+    svg.appendChild(txt(sx(qEndClip)+7, sy(Math.max(0.5, dP(qEndClip)+extMag)), 'MSB', {fill:C_MSB,'font-size':13}));
+  }
+
+  // Supply (S = MPC or S = MPC = MSC)
+  {
+    const qEnd = Math.min(QMAX - 0.3, (PMAX - sP(0)) / 1);
+    svg.appendChild(curveLine(sx(0), sy(sP(0)), sx(qEnd), sy(sP(qEnd)), C_S));
+    const slabel = negExt ? 'S = MPC' : 'S = MPC = MSC';
+    svg.appendChild(txt(sx(qEnd)+7, sy(sP(qEnd)), slabel, {fill:C_S,'font-size':12.5}));
+  }
+
+  // Demand (D = MPB or D = MPB = MSB)
+  {
+    const qEnd = Math.min(QMAX - 0.3, dP(0) / 1);
+    svg.appendChild(curveLine(sx(0), sy(dP(0)), sx(qEnd), sy(dP(qEnd)), C_D));
+    const dlabel = posExt ? 'D = MPB' : 'D = MPB = MSB';
+    svg.appendChild(txt(sx(qEnd)+7, sy(dP(qEnd)+0.1), dlabel, {fill:C_D,'font-size':12.5}));
+  }
+
+  // Tax/subsidy wedge bracket
+  if (hasTaxSub) {
+    const bx = sx(Q_act) + 20;
+    const y_b = sy(Pb_act), y_s = sy(Ps_act);
+    const y_lo = Math.min(y_b, y_s), y_hi = Math.max(y_b, y_s);
+    if (y_hi - y_lo > 6) {
+      const bc = '#2d862d';
+      svg.appendChild(line(bx, y_lo, bx, y_hi, {stroke:bc,'stroke-width':1.8}));
+      svg.appendChild(line(bx-4, y_lo, bx+4, y_lo, {stroke:bc,'stroke-width':1.8}));
+      svg.appendChild(line(bx-4, y_hi, bx+4, y_hi, {stroke:bc,'stroke-width':1.8}));
+      const wlabel = hasTax ? 'τ' : 's';
+      svg.appendChild(txt(bx+6, (y_lo+y_hi)/2, wlabel, {fill:bc,'font-size':13,'dominant-baseline':'middle'}));
+    }
+  }
+
+  // ── DASHED LINES & DOTS ───────────────────────────────────────────
+  const dotGray = '#555';
+
+  // efficient equilibrium (when differs from actual)
+  const effDiffers = Math.abs(Q_eff - Q_act) > EPS / 2;
+  if (effDiffers && (negExt || posExt)) {
+    svg.appendChild(dashed(sx(Q_eff), sy(0), sx(Q_eff), sy(P_eff), '#888'));
+    svg.appendChild(dashed(sx(0), sy(P_eff), sx(Q_eff), sy(P_eff), '#888'));
+    svg.appendChild(dot(sx(Q_eff), sy(P_eff), 4.5, dotGray));
+    svg.appendChild(mathTxt(sx(Q_eff), sy(0)+16, 'qᵉ',
+      {'text-anchor':'middle','font-size':12,fill:'#555'}));
+    svg.appendChild(mathTxt(sx(0)-6, sy(P_eff), 'pᵉ',
+      {'text-anchor':'end','font-size':12,fill:'#555'}));
+  }
+
+  // free-market equilibrium (q*)
+  // always show q*; if no tax it's also the traded qty
+  if (hasTaxSub) {
+    // show q* as lighter reference
+    svg.appendChild(dashed(sx(Q_star), sy(0), sx(Q_star), sy(P_star), '#ccc'));
+    svg.appendChild(dot(sx(Q_star), sy(P_star), 3.5, '#bbb'));
+    svg.appendChild(mathTxt(sx(Q_star), sy(0)+16, 'q*',
+      {'text-anchor':'middle','font-size':12,fill:'#bbb'}));
+
+    // show q_tau with p_b and p_s
+    svg.appendChild(dashed(sx(Q_act), sy(0), sx(Q_act), sy(Pb_act), '#666'));
+    svg.appendChild(dashed(sx(0), sy(Pb_act), sx(Q_act), sy(Pb_act), '#666'));
+    svg.appendChild(dashed(sx(0), sy(Ps_act), sx(Q_act), sy(Ps_act), '#666'));
+    svg.appendChild(dot(sx(Q_act), sy(Pb_act), 4.5, '#333'));
+    svg.appendChild(dot(sx(Q_act), sy(Ps_act), 4.5, '#333'));
+    svg.appendChild(mathTxt(sx(Q_act), sy(0)+16, 'qτ',
+      {'text-anchor':'middle','font-size':12,fill:'#333'}));
+    svg.appendChild(mathTxt(sx(0)-6, sy(Pb_act), 'pᵇ',
+      {'text-anchor':'end','font-size':12,fill:'#333'}));
+    svg.appendChild(mathTxt(sx(0)-6, sy(Ps_act), 'pˢ',
+      {'text-anchor':'end','font-size':12,fill:'#333'}));
+  } else {
+    // no tax: q* is the traded qty
+    svg.appendChild(dashed(sx(Q_star), sy(0), sx(Q_star), sy(P_star), '#888'));
+    svg.appendChild(dashed(sx(0), sy(P_star), sx(Q_star), sy(P_star), '#888'));
+    svg.appendChild(dot(sx(Q_star), sy(P_star), 4.5, dotGray));
+    svg.appendChild(mathTxt(sx(Q_star), sy(0)+16, 'q*',
+      {'text-anchor':'middle','font-size':12,fill:'#555'}));
+    svg.appendChild(mathTxt(sx(0)-6, sy(P_star), 'p*',
+      {'text-anchor':'end','font-size':12,fill:'#555'}));
+  }
+
+  // ── AXES ──────────────────────────────────────────────────────────
+  svg.appendChild(line(sx(0), sy(0), sx(QMAX-0.2), sy(0), {stroke:'#333','stroke-width':2}));
+  svg.appendChild(line(sx(0), sy(0), sx(0), sy(PMAX-0.2), {stroke:'#333','stroke-width':2}));
+  // arrowheads
+  svg.appendChild(svgEl('polygon', {
+    points: `${sx(QMAX-0.2)},${sy(0)-5} ${sx(QMAX-0.2)+10},${sy(0)} ${sx(QMAX-0.2)},${sy(0)+5}`,
+    fill:'#333'}));
+  svg.appendChild(svgEl('polygon', {
+    points: `${sx(0)-5},${sy(PMAX-0.2)} ${sx(0)},${sy(PMAX-0.2)-10} ${sx(0)+5},${sy(PMAX-0.2)}`,
+    fill:'#333'}));
+  svg.appendChild(txt(sx(QMAX-0.2)+14, sy(0), 'Q',
+    {'text-anchor':'middle','font-size':15,'font-weight':'bold',fill:'#333'}));
+  svg.appendChild(txt(sx(0)-8, sy(PMAX-0.2)-12, 'P',
+    {'text-anchor':'middle','font-size':15,'font-weight':'bold',fill:'#333'}));
+
+  // ── LEGEND ────────────────────────────────────────────────────────
+  const legendDefs = [
+    { color: C_CS,  stroke: C_CS_S,  label: 'Consumer Surplus' },
+    { color: C_PS,  stroke: C_PS_S,  label: 'Producer Surplus' },
+  ];
+  if (hasTaxSub) {
+    legendDefs.push({ color: C_GOV, stroke: C_GOV_S,
+      label: hasTax ? 'Gov. Revenue' : 'Gov. Payment (Subsidy Cost)' });
+  }
+  if (negExt) legendDefs.push({ color: C_EXT, stroke: C_EXT_S, label: 'External Cost' });
+  if (posExt) legendDefs.push({ color: C_EXT, stroke: C_EXT_S, label: 'External Benefit' });
+  if (dwlDiffers) legendDefs.push({ color: C_DWL, stroke: C_DWL_S, label: 'Deadweight Loss' });
+
+  const legend = document.getElementById('legend');
+  legend.innerHTML = '';
+  for (const item of legendDefs) {
+    const d = document.createElement('div');
+    d.className = 'legend-item';
+    const sw = document.createElement('div');
+    sw.className = 'legend-swatch';
+    sw.style.background = item.color;
+    sw.style.border = `1px solid ${item.stroke}`;
+    d.appendChild(sw);
+    d.appendChild(document.createTextNode(item.label));
+    legend.appendChild(d);
+  }
+
+  // ── SLIDER END LABELS (highlight active side) ─────────────────────
+  document.getElementById('ext-left').className  = negExt ? 'active-left'  : '';
+  document.getElementById('ext-right').className = posExt ? 'active-right' : '';
+  document.getElementById('tax-left').className  = hasSub ? 'active-left'  : '';
+  document.getElementById('tax-right').className = hasTax ? 'active-right' : '';
+}
+
+document.getElementById('ext-slider').addEventListener('input', draw);
+document.getElementById('tax-slider').addEventListener('input', draw);
+draw();
+</script>
+</body>
+</html>
