@@ -21,6 +21,9 @@
   .slider-ends span.active-left  { color: #c0392b; font-weight: bold; }
   .slider-ends span.active-right { color: #27ae60; font-weight: bold; }
   .val-display { font-size: 13px; color: #555; width: 44px; text-align: right; flex-shrink: 0; }
+  .toggle-row { display: flex; align-items: center; gap: 8px; padding-top: 2px; }
+  .toggle-row label { font-size: 13px; color: #444; cursor: pointer; user-select: none; }
+  .toggle-row input[type=checkbox] { width: 15px; height: 15px; cursor: pointer; accent-color: #2c7bb6; }
   #legend {
     background: white; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.12);
     padding: 10px 16px; width: 680px; display: flex; flex-wrap: wrap; gap: 10px;
@@ -57,6 +60,10 @@
         </div>
       </div>
       <span class="val-display" id="tax-val">0.0</span>
+    </div>
+    <div class="toggle-row">
+      <input type="checkbox" id="show-surplus">
+      <label for="show-surplus">Show surpluses</label>
     </div>
   </div>
 
@@ -134,6 +141,7 @@ function draw() {
 
   const ext = parseFloat(document.getElementById('ext-slider').value);
   const tax = parseFloat(document.getElementById('tax-slider').value);
+  const showSurplus = document.getElementById('show-surplus').checked;
 
   document.getElementById('ext-val').textContent = ext.toFixed(1);
   document.getElementById('tax-val').textContent = tax.toFixed(1);
@@ -179,7 +187,7 @@ function draw() {
 
   // ── LAYER 0: DWL (behind everything) ─────────────────────────────
   const dwlDiffers = Math.abs(Q_act - Q_eff) > EPS / 2;
-  if (dwlDiffers) {
+  if (showSurplus && dwlDiffers) {
     let triPts;
     if (!posExt) {
       // neg ext or no ext: DWL between MPB and MSC
@@ -199,52 +207,52 @@ function draw() {
     svg.appendChild(fillPoly(triPts, C_DWL, C_DWL_S));
   }
 
-  // ── LAYER 1: CS ───────────────────────────────────────────────────
-  svg.appendChild(fillPoly([
-    [sx(0),     sy(dP(0))],
-    [sx(Q_act), sy(Pb_act)],
-    [sx(0),     sy(Pb_act)],
-  ], C_CS, C_CS_S));
-
-  // ── LAYER 2: PS ───────────────────────────────────────────────────
-  svg.appendChild(fillPoly([
-    [sx(0),     sy(sP(0))],
-    [sx(Q_act), sy(Ps_act)],
-    [sx(0),     sy(Ps_act)],
-  ], C_PS, C_PS_S));
-
-  // ── LAYER 3: gov revenue / payment ───────────────────────────────
-  if (hasTaxSub) {
-    const p_lo = Math.min(Pb_act, Ps_act);
-    const p_hi = Math.max(Pb_act, Ps_act);
+  if (showSurplus) {
+    // ── LAYER 1: CS ─────────────────────────────────────────────────
     svg.appendChild(fillPoly([
-      [sx(0),     sy(p_lo)],
-      [sx(Q_act), sy(p_lo)],
-      [sx(Q_act), sy(p_hi)],
-      [sx(0),     sy(p_hi)],
-    ], C_GOV, C_GOV_S));
-  }
-
-  // ── LAYER 4: external cost / benefit (drawn on top so full range is visible)
-  if (negExt) {
-    // parallelogram between MPC and MSC from Q=0 to Q_act
-    const pts = [
-      [sx(0),     sy(sP(0))],
-      [sx(Q_act), sy(Ps_act)],
-      [sx(Q_act), sy(MSC_act)],
-      [sx(0),     sy(sP(0) + extMag)],
-    ];
-    svg.appendChild(fillPoly(pts, C_EXT, C_EXT_S));
-  }
-  if (posExt) {
-    // parallelogram between MPB and MSB from Q=0 to Q_act
-    const pts = [
       [sx(0),     sy(dP(0))],
       [sx(Q_act), sy(Pb_act)],
-      [sx(Q_act), sy(MSB_act)],
-      [sx(0),     sy(dP(0) + extMag)],
-    ];
-    svg.appendChild(fillPoly(pts, C_EXT, C_EXT_S));
+      [sx(0),     sy(Pb_act)],
+    ], C_CS, C_CS_S));
+
+    // ── LAYER 2: PS ─────────────────────────────────────────────────
+    svg.appendChild(fillPoly([
+      [sx(0),     sy(sP(0))],
+      [sx(Q_act), sy(Ps_act)],
+      [sx(0),     sy(Ps_act)],
+    ], C_PS, C_PS_S));
+
+    // ── LAYER 3: gov revenue / payment ──────────────────────────────
+    if (hasTaxSub) {
+      const p_lo = Math.min(Pb_act, Ps_act);
+      const p_hi = Math.max(Pb_act, Ps_act);
+      svg.appendChild(fillPoly([
+        [sx(0),     sy(p_lo)],
+        [sx(Q_act), sy(p_lo)],
+        [sx(Q_act), sy(p_hi)],
+        [sx(0),     sy(p_hi)],
+      ], C_GOV, C_GOV_S));
+    }
+
+    // ── LAYER 4: external cost / benefit (drawn on top so full range is visible)
+    if (negExt) {
+      const pts = [
+        [sx(0),     sy(sP(0))],
+        [sx(Q_act), sy(Ps_act)],
+        [sx(Q_act), sy(MSC_act)],
+        [sx(0),     sy(sP(0) + extMag)],
+      ];
+      svg.appendChild(fillPoly(pts, C_EXT, C_EXT_S));
+    }
+    if (posExt) {
+      const pts = [
+        [sx(0),     sy(dP(0))],
+        [sx(Q_act), sy(Pb_act)],
+        [sx(Q_act), sy(MSB_act)],
+        [sx(0),     sy(dP(0) + extMag)],
+      ];
+      svg.appendChild(fillPoly(pts, C_EXT, C_EXT_S));
+    }
   }
 
   // ── CURVES ────────────────────────────────────────────────────────
@@ -359,17 +367,18 @@ function draw() {
     {'text-anchor':'middle','font-size':15,'font-weight':'bold',fill:'#333'}));
 
   // ── LEGEND ────────────────────────────────────────────────────────
-  const legendDefs = [
-    { color: C_CS,  stroke: C_CS_S,  label: 'Consumer Surplus' },
-    { color: C_PS,  stroke: C_PS_S,  label: 'Producer Surplus' },
-  ];
-  if (hasTaxSub) {
-    legendDefs.push({ color: C_GOV, stroke: C_GOV_S,
-      label: hasTax ? 'Gov. Revenue' : 'Gov. Payment (Subsidy Cost)' });
+  const legendDefs = [];
+  if (showSurplus) {
+    legendDefs.push({ color: C_CS,  stroke: C_CS_S,  label: 'Consumer Surplus' });
+    legendDefs.push({ color: C_PS,  stroke: C_PS_S,  label: 'Producer Surplus' });
+    if (hasTaxSub) {
+      legendDefs.push({ color: C_GOV, stroke: C_GOV_S,
+        label: hasTax ? 'Gov. Revenue' : 'Gov. Payment (Subsidy Cost)' });
+    }
+    if (negExt) legendDefs.push({ color: C_EXT, stroke: C_EXT_S, label: 'External Cost' });
+    if (posExt) legendDefs.push({ color: C_EXT, stroke: C_EXT_S, label: 'External Benefit' });
+    if (dwlDiffers) legendDefs.push({ color: C_DWL, stroke: C_DWL_S, label: 'Deadweight Loss' });
   }
-  if (negExt) legendDefs.push({ color: C_EXT, stroke: C_EXT_S, label: 'External Cost' });
-  if (posExt) legendDefs.push({ color: C_EXT, stroke: C_EXT_S, label: 'External Benefit' });
-  if (dwlDiffers) legendDefs.push({ color: C_DWL, stroke: C_DWL_S, label: 'Deadweight Loss' });
 
   const legend = document.getElementById('legend');
   legend.innerHTML = '';
@@ -394,6 +403,7 @@ function draw() {
 
 document.getElementById('ext-slider').addEventListener('input', draw);
 document.getElementById('tax-slider').addEventListener('input', draw);
+document.getElementById('show-surplus').addEventListener('change', draw);
 draw();
 </script>
 </body>
